@@ -1,0 +1,140 @@
+:root {
+    --bg: #f9f9fb;
+    --card: #ffffff;
+    --text: #1a1a1a;
+    --accent: #1e88e5;
+    --shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  }
+  
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  
+  h1 {
+    text-align: center;
+    margin: 1.5rem auto;
+    font-size: 2rem;
+    font-weight: 600;
+  }
+  
+  .toolbar {
+    position: sticky;
+    top: 0;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+    z-index: 10;
+  }
+  
+  .toolbar label {
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  select,
+  button {
+    padding: 0.4rem 0.8rem;
+    font-size: 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid #ccc;
+  }
+  
+  button {
+    background-color: var(--accent);
+    color: white;
+    border: none;
+    cursor: pointer;
+  }
+  
+  button:disabled {
+    background-color: #aaa;
+    cursor: not-allowed;
+  }
+  
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 1.5rem;
+    padding: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .sim-card {
+    background: var(--card);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid #e0e0e0;
+  }
+  
+  .sim-card header {
+    background: var(--accent);
+    color: white;
+    padding: 0.75rem 1rem;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+  
+  canvas {
+    width: 100%;
+    aspect-ratio: 1;
+    border: none;
+    display: block;
+    background: white;
+  }
+  
+  .score {
+    text-align: center;
+    font-size: 1.1rem;
+    margin: 1rem auto 2rem;
+  }
+  
+  table {
+    margin: 0 auto;
+    border-collapse: collapse;
+  }
+  
+  th,
+  td {
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #ddd;
+  }
+  
+  tr.winner {
+    background: #e3f2fd;
+    color: var(--accent);
+    font-weight: bold;
+  }
+  
+  tr.winner td {
+    animation: glow 2s ease-in-out;
+  }
+  
+  @keyframes glow {
+    0% {
+      background-color: #e3f2fd;
+    }
+    50% {
+      background-color: #bbdefb;
+    }
+    100% {
+      background-color: #e3f2fd;
+    }
+  }
+  

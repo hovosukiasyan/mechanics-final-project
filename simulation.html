@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Particle Simulation Showdown</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <h1>Particle Packing & Floor-Planning Showdown</h1>
+
+    <div class="toolbar">
+      <label>
+        Mode:
+        <select id="modeSel">
+          <option value="packing">Packing</option>
+          <option value="floor">Floor-planning</option>
+        </select>
+      </label>
+
+      <button id="startBtn">Start All</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+
+    <div class="grid">
+      <div class="sim-card">
+        <header>Circles</header>
+        <canvas id="cvCircle" width="500" height="500"></canvas>
+      </div>
+      <div class="sim-card">
+        <header>Squares</header>
+        <canvas id="cvSquare" width="500" height="500"></canvas>
+      </div>
+      <div class="sim-card">
+        <header>Rectangles</header>
+        <canvas id="cvRect" width="500" height="500"></canvas>
+      </div>
+    </div>
+
+    <div id="scoreBoard" class="score"></div>
+    <!-- <script type="module" src="script.js"></script> -->
+     <script>
+
+      // CONSTANTS (controls how the simulation behaves)
+      const G_PACK = 100000; // Strength of attraction for packing mode
+      const G_FLOOR = 200; // Strength of attraction for floor-planning mode
+      const K_REPEL = 100; // Push force when shapes overlap
+      const DT = 0.02; // Time step for movement updates
+      const DAMP = 0.99; // Slows down particles over time
+      const N = 10; // Number of shapes to simulate
+      const T_MAX = 30000; // Maximum steps before stopping
+      const STOP_EKIN = 0.005; // Stops simulation when movement is this low
+
+      // Target box for floor-planning mode
+      const TARGET_BOX = { cx: 250, cy: 250, w: 100, h: 100 };
+      const GATHER_STRENGTH = 0.5; // Pull strength toward target box
+      let globalTimeoutId = null;
+
+      // Utilities (helper functions for math and shapes)
+
+      // Picks a random number between min and max
+      function rand(min, max) {
+        return min + Math.random() * (max - min);
+      }
+
+      // Calculates the area of a shape (circle, square, or rectangle)
+      function massOf(p) {
+        if (p.type === "circle") return Math.PI * p.r * p.r;
+        if (p.type === "square") return p.size * p.size;
+        return p.width * p.height; // rectangle
+      }
+
+      // PackingEngine (manages the simulation for one shape type)
+      class PackingEngine {
+        constructor(canvas, shape) {
+          // Sets up the canvas and shape type (circle, square, or rectangle)
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.shape = shape;
+          this.isFloor = false;
+          this.particles = [];
+          this.iter = 0;
+          this.running = false;
+        }
+
+        // Creates a set of random shapes to simulate
+        generateParticles(n) {
+          const out = [];
+          for (let i = 0; i < n; i++) {
+            if (this.shape === "circle")
+              out.push({
+                x: rand(0, 500),
+                y: rand(0, 500),
+                r: rand(10, 30),
+                vx: 0,
+                vy: 0,
+                type: "circle",
+              });
+            else if (this.shape === "square")
+              out.push({
+                x: rand(0, 500),
+                y: rand(0, 500),
+                size: rand(20, 60),
+                vx: 0,
+                vy: 0,
+                type: "square",
+              });
+            else
+              out.push({
+                x: rand(0, 500),
+                y: rand(0, 500),
+                width: rand(20, 60),
+                height: rand(10, 40),
+                vx: 0,
+                vy: 0,
+                type: "rectangle",
+              });
+          }
+          return out;
+        }
+
+        // Figures out how much two shapes overlap
+        getOverlap(p1, p2) {
+          const dx = p2.x - p1.x,
+            dy = p2.y - p1.y,
+            dist = Math.hypot(dx, dy);
+          if (p1.type === "circle" && p2.type === "circle")
+            return Math.max(0, p1.r + p2.r - dist);
+
+          if (p1.type === "square" && p2.type === "square") {
+            const h1 = p1.size / 2,
+              h2 = p2.size / 2;
+            const ox = h1 + h2 - Math.abs(dx),
+              oy = h1 + h2 - Math.abs(dy);
+            return ox > 0 && oy > 0 ? Math.min(ox, oy) : 0;
+          }
+          if (p1.type === "rectangle" && p2.type === "rectangle") {
+            const hw1 = p1.width / 2,
+              hh1 = p1.height / 2,
+              hw2 = p2.width / 2,
+              hh2 = p2.height / 2;
+            const ox = hw1 + hw2 - Math.abs(dx),
+              oy = hh1 + hh2 - Math.abs(dy);
+            return ox > 0 && oy > 0 ? Math.min(ox, oy) : 0;
+          }
+          return 0;
+        }
+
+        // Calculates forces pulling shapes together or pushing them apart
+        computeForces() {
+          const parts = this.particles,
+            isFloor = this.isFloor;
+          parts.forEach((p) => {
+            p.fx = 0;
+            p.fy = 0;
+          });
+          const G = isFloor ? G_FLOOR : G_PACK;
+
+          for (let i = 0; i < parts.length; i++) {
+            const p1 = parts[i],
+              m1 = isFloor ? massOf(p1) : 1;
+            for (let j = i + 1; j < parts.length; j++) {
+              const p2 = parts[j],
+                m2 = isFloor ? massOf(p2) : 1;
+              const dx = p2.x - p1.x,
+                dy = p2.y - p1.y;
+              const dist = Math.hypot(dx, dy) || 1e-4;
+
+              // Attraction force
+              const f = (G * m1 * m2) / (dist * dist);
+              const fxAttr = (f * dx) / dist,
+                fyAttr = (f * dy) / dist;
+
+              // Repulsion if shapes overlap
+              let fxRep = 0,
+                fyRep = 0;
+              const ov = this.getOverlap(p1, p2);
+              if (ov > 0) {
+                const frep = K_REPEL * ov;
+                fxRep = (-frep * dx) / dist;
+                fyRep = (-frep * dy) / dist;
+              }
+
+              p1.fx += fxAttr + fxRep;
+              p1.fy += fyAttr + fyRep;
+              p2.fx -= fxAttr + fxRep;
+              p2.fy -= fyAttr + fyRep;
+            }
+          }
+
+          // Pulls shapes toward the target box in floor-planning mode
+          if (isFloor) {
+            parts.forEach((p) => {
+              const dx = TARGET_BOX.cx - p.x,
+                dy = TARGET_BOX.cy - p.y;
+              const d = Math.hypot(dx, dy) || 1e-4;
+              const f = GATHER_STRENGTH * massOf(p);
+              p.fx += (f * dx) / d;
+              p.fy += (f * dy) / d;
+            });
+          }
+        }
+
+        // Turns forces into accelerations for each shape
+        computeAccelerations() {
+          this.particles.forEach((p) => {
+            const m = this.isFloor ? massOf(p) : 1;
+            p.ax = p.fx / m;
+            p.ay = p.fy / m;
+          });
+        }
+
+        // Moves shapes and handles collisions with walls and other shapes
+        updatePositions() {
+          const parts = this.particles,
+            isFloor = this.isFloor;
+          let ekin = 0;
+
+          const box = { xMin: 0, xMax: 500, yMin: 0, yMax: 500 };
+
+          parts.forEach((p) => {
+            p.vx = p.vx * DAMP + p.ax * DT;
+            p.vy = p.vy * DAMP + p.ay * DT;
+            p.x += p.vx * DT;
+            p.y += p.vy * DT;
+
+            // Bounce off walls
+            const rad =
+              p.type === "circle"
+                ? p.r
+                : p.type === "square"
+                ? p.size / 2
+                : Math.max(p.width, p.height) / 2;
+            if (p.x - rad < box.xMin) {
+              p.x = box.xMin + rad;
+              p.vx = -p.vx;
+            }
+            if (p.x + rad > box.xMax) {
+              p.x = box.xMax - rad;
+              p.vx = -p.vx;
+            }
+            if (p.y - rad < box.yMin) {
+              p.y = box.yMin + rad;
+              p.vy = -p.vy;
+            }
+            if (p.y + rad > box.yMax) {
+              p.y = box.yMax - rad;
+              p.vy = -p.vy;
+            }
+
+            ekin +=
+              0.5 *
+              (this.isFloor ? massOf(p) : 1) *
+              (p.vx * p.vx + p.vy * p.vy);
+          });
+
+          // Handle collisions between shapes
+          for (let i = 0; i < parts.length; i++) {
+            for (let j = i + 1; j < parts.length; j++) {
+              const pi = parts[i],
+                pj = parts[j];
+              const dx = pj.x - pi.x,
+                dy = pj.y - pi.y,
+                dist = Math.hypot(dx, dy);
+              const minDist =
+                (pi.type === "circle" ? pi.r : pi.size / 2) +
+                (pj.type === "circle" ? pj.r : pj.size / 2);
+              if (dist <= minDist) {
+                const overlap = minDist - dist - 1e-3;
+                const nx = dx / (dist || 1e-4),
+                  ny = dy / (dist || 1e-4);
+                const total = massOf(pi) + massOf(pj);
+                pi.x -= overlap * (massOf(pj) / total) * nx;
+                pi.y -= overlap * (massOf(pj) / total) * ny;
+                pj.x += overlap * (massOf(pi) / total) * nx;
+                pj.y += overlap * (massOf(pi) / total) * ny;
+
+                const newVx = (massOf(pi) * pi.vx + massOf(pj) * pj.vx) / total;
+                const newVy = (massOf(pi) * pi.vy + massOf(pj) * pj.vy) / total;
+                pi.vx = pj.vx = newVx;
+                pi.vy = pj.vy = newVy;
+              }
+            }
+          }
+          return ekin;
+        }
+
+        // Finds the smallest box that contains all shapes
+        computeBBox() {
+          let minX = 1e9,
+            minY = 1e9,
+            maxX = -1e9,
+            maxY = -1e9;
+          this.particles.forEach((p) => {
+            if (p.type === "circle") {
+              minX = Math.min(minX, p.x - p.r);
+              maxX = Math.max(maxX, p.x + p.r);
+              minY = Math.min(minY, p.y - p.r);
+              maxY = Math.max(maxY, p.y + p.r);
+            } else if (p.type === "square") {
+              const h = p.size / 2;
+              minX = Math.min(minX, p.x - h);
+              maxX = Math.max(maxX, p.x + h);
+              minY = Math.min(minY, p.y - h);
+              maxY = Math.max(maxY, p.y + h);
+            } else {
+              const hw = p.width / 2,
+                hh = p.height / 2;
+              minX = Math.min(minX, p.x - hw);
+              maxX = Math.max(maxX, p.x + hw);
+              minY = Math.min(minY, p.y - hh);
+              maxY = Math.max(maxY, p.y + hh);
+            }
+          });
+          return { w: maxX - minX, h: maxY - minY, minX, minY };
+        }
+
+        // Adds up the total area of all shapes
+        totalShapeArea() {
+          return this.particles.reduce((s, p) => s + massOf(p), 0);
+        }
+
+        // Draws the shapes and their bounding box on the canvas
+        draw() {
+          const ctx = this.ctx;
+          ctx.clearRect(0, 0, 500, 500);
+          // Show target box in floor-planning mode
+          if (this.isFloor) {
+            ctx.strokeStyle = "red";
+            ctx.strokeRect(
+              TARGET_BOX.cx - TARGET_BOX.w / 2,
+              TARGET_BOX.cy - TARGET_BOX.h / 2,
+              TARGET_BOX.w,
+              TARGET_BOX.h
+            );
+          }
+          ctx.strokeStyle = "#000";
+          this.particles.forEach((p) => {
+            ctx.beginPath();
+            if (p.type === "circle") ctx.arc(p.x, p.y, p.r, 0, 2 * Math.PI);
+            else if (p.type === "square") {
+              const h = p.size / 2;
+              ctx.rect(p.x - h, p.y - h, p.size, p.size);
+            } else {
+              const hw = p.width / 2,
+                hh = p.height / 2;
+              ctx.rect(p.x - hw, p.y - hh, p.width, p.height);
+            }
+            ctx.stroke();
+          });
+
+          // Draw the bounding box in blue
+          const bb = this.computeBBox();
+          ctx.strokeStyle = "blue";
+          ctx.strokeRect(bb.minX, bb.minY, bb.w, bb.h);
+        }
+
+        // Starts the simulation, running until shapes settle or time’s up
+        start(mode) {
+          this.isFloor = mode === "floor";
+          this.particles = this.generateParticles(N);
+          this.iter = 0;
+          this.running = true;
+          const loop = () => {
+            if (!this.running) return;
+            this.computeForces();
+            this.computeAccelerations();
+            const ekin = this.updatePositions();
+            this.draw();
+            this.iter++;
+            if ((ekin < STOP_EKIN && this.iter > 1000) || this.iter >= T_MAX) {
+              this.running = false;
+              window.dispatchEvent(
+                new CustomEvent("engineDone", { detail: this })
+              );
+            } else {
+              requestAnimationFrame(loop);
+            }
+          };
+          loop();
+        }
+
+        // Stops the simulation early
+        stop() {
+          this.running = false;
+        }
+      }
+
+      // Supervisor – runs three engines, ranks results, updates UI
+      const cvs = {
+        circle: document.getElementById("cvCircle"),
+        square: document.getElementById("cvSquare"),
+        rect: document.getElementById("cvRect"),
+      };
+
+      const engines = {
+        circle: new PackingEngine(cvs.circle, "circle"),
+        square: new PackingEngine(cvs.square, "square"),
+        rect: new PackingEngine(cvs.rect, "rectangle"),
+      };
+
+      const btnStart = document.getElementById("startBtn");
+      const btnStop = document.getElementById("stopBtn");
+      const modeSel = document.getElementById("modeSel");
+      const scoreDiv = document.getElementById("scoreBoard");
+
+      // Starts all three simulations and sets a timer to stop them
+      btnStart.onclick = () => {
+        scoreDiv.textContent = "";
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        finished.clear();
+
+        for (const key in engines) engines[key].start(modeSel.value);
+
+        // Stop and rank after 10 seconds
+        globalTimeoutId = setTimeout(() => {
+          for (const key in engines) engines[key].stop();
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+          rankEngines();
+        }, 10000);
+      };
+
+      // Stops all simulations and cancels the timer
+      btnStop.onclick = () => {
+        for (const key in engines) engines[key].stop();
+        clearTimeout(globalTimeoutId);
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+      };
+
+      // Tracks when simulations finish and ranks results
+      const finished = new Set();
+      window.addEventListener("engineDone", (e) => {
+        finished.add(e.detail);
+        if (finished.size === 3) {
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+          scoreDiv.innerHTML =
+            "<p><em>All simulations complete. Calculating best shape in 10 seconds...</em></p>";
+
+          // Wait 10 seconds before ranking
+          setTimeout(() => {
+            finished.clear();
+            rankEngines();
+          }, 10000);
+        }
+      });
+
+      //Compares results and shows which shape packed best
+      function computeIntersectionArea(p, box) {
+        const xMin = box.cx - box.w/2;
+        const yMin = box.cy - box.h/2;
+        const xMax = box.cx + box.w/2;
+        const yMax = box.cy + box.h/2;
+
+        // For circles: approximate via clipping to bounding rect
+        if (p.type === 'circle') {
+          // approximate by sampling on a grid or use analytical formula
+          const steps = 16;
+          let count = 0;
+          for (let i = 0; i < steps; i++) {
+            const theta = (2*Math.PI*i)/steps;
+            const xi = p.x + Math.cos(theta)*p.r;
+            const yi = p.y + Math.sin(theta)*p.r;
+            if (xi >= xMin && xi <= xMax && yi >= yMin && yi <= yMax) count++;
+          }
+          return (count/steps) * (Math.PI * p.r * p.r);
+        }
+
+        // For rectangles and squares: clip the box formed by the shape
+        let left, right, top, bottom;
+        if (p.type === 'square') {
+          const h = p.size/2;
+          left = p.x - h; right = p.x + h;
+          top = p.y - h; bottom = p.y + h;
+        } else {
+          const hw = p.width/2, hh = p.height/2;
+          left = p.x - hw; right = p.x + hw;
+          top = p.y - hh; bottom = p.y + hh;
+        }
+        const ix = Math.max(0, Math.min(right, xMax) - Math.max(left, xMin));
+        const iy = Math.max(0, Math.min(bottom, yMax) - Math.max(top, yMin));
+        return ix * iy;
+      }
+
+      // Ranking: using Intersection over Union (IoU) metric for floor-planning mode
+      // Intersection-over-Union (IoU) metric for floor-planning. Now each engine computes:
+      // interArea: total area of its shapes lying inside the target box
+      // unionArea: sum of the shape area plus target-box area minus that intersection
+      // IoU = interArea / unionArea
+
+      function rankEngines() {
+        const results = [];
+        const isFloor = modeSel.value === 'floor';
+        const targetArea = TARGET_BOX.w * TARGET_BOX.h;
+
+        for (const key in engines) {
+          const eng = engines[key];
+          const shapeArea = eng.totalShapeArea();
+          // compute intersection area of all shapes with the box
+          let interArea = 0;
+          eng.particles.forEach(p => {
+            interArea += computeIntersectionArea(p, TARGET_BOX);
+          });
+          // union area = shapeArea + targetArea - interArea
+          const unionArea = shapeArea + targetArea - interArea;
+          const iou = unionArea > 0 ? interArea / unionArea : 0;
+
+          results.push({ shape: key, iou, interArea, shapeArea });
+        }
+
+        if (isFloor) {
+          // sort descending by IoU
+          results.sort((a,b) => b.iou - a.iou);
+        } else {
+          // packing: sort ascending by bounding-box area as before
+          results.sort((a,b) => {
+            const bbA = engines[a.shape].computeBBox();
+            const bbB = engines[b.shape].computeBBox();
+            return (bbA.w*bbA.h) - (bbB.w*bbB.h);
+          });
+        }
+
+        const winner = results[0];
+
+        // render the table
+        let html = '<table style="margin:0 auto;border-collapse:collapse">';
+        if (isFloor) {
+          html += '<tr><th>Shape</th><th>IoU</th><th>Covered</th><th>Total Shape</th></tr>';
+          results.forEach(r => {
+            const cls = r.shape === winner.shape ? 'winner' : '';
+            html += `<tr class="${cls}"><td>${r.shape}</td><td>${(r.iou*100).toFixed(1)}%</td><td>${r.interArea.toFixed(0)}</td><td>${r.shapeArea.toFixed(0)}</td></tr>`;
+          });
+        } else {
+          html += '<tr><th>Shape</th><th>BBox Area</th></tr>';
+          results.forEach(r => {
+            const bb = engines[r.shape].computeBBox();
+            const cls = r.shape === winner.shape ? 'winner' : '';
+            html += `<tr class="${cls}"><td>${r.shape}</td><td>${(bb.w*bb.h).toFixed(0)}</td></tr>`;
+          });
+        }
+        html += '</table>';
+        scoreDiv.innerHTML = html + `<p class="winner">Best: ${winner.shape}</p>`;
+      }
+
+     </script>
+  </body>
+</html>
